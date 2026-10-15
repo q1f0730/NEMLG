@@ -1,0 +1,148 @@
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Material {
+    /// Frost amount, as a mip level of the captured desktop (0 = clear, 5 = heavy).
+    pub blur: f32,
+    /// Max refraction offset at the rim, in dip.
+    pub refraction: f32,
+    /// Width of the lens band along the edge, in dip.
+    pub edge: f32,
+    /// 1 bends the backdrop inward, -1 outward.
+    pub refraction_sign: f32,
+    /// Chromatic dispersion strength at the rim (0..0.4).
+    pub aberration: f32,
+    pub saturation: f32,
+    pub brightness: f32,
+    pub tint: [f32; 3],
+    pub tint_amount: f32,
+    /// Crisp rim line opacity.
+    pub rim: f32,
+    /// Specular lobe on the lit edge.
+    pub specular: f32,
+    /// Top-down body sheen.
+    pub sheen: f32,
+    pub shadow: f32,
+    pub shadow_blur: f32,
+    pub shadow_y: f32,
+    /// Light direction (screen space, y down). Default comes from top-left.
+    pub light: [f32; 2],
+    pub radius: f32,
+    /// Darken bright backdrops so white text stays readable (0..1).
+    pub adaptive: f32,
+}
+
+impl Default for Material {
+    fn default() -> Self {
+        Material {
+            blur: 3.6,
+            refraction: 18.0,
+            edge: 16.0,
+            refraction_sign: 1.0,
+            aberration: 0.18,
+            saturation: 1.35,
+            brightness: 1.0,
+            tint: [0.06, 0.06, 0.08],
+            tint_amount: 0.16,
+            rim: 0.62,
+            specular: 0.10,
+            sheen: 1.0,
+            shadow: 0.30,
+            shadow_blur: 18.0,
+            shadow_y: 6.0,
+            light: [-0.45, -1.0],
+            radius: 28.0,
+            adaptive: 0.6,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WidgetCfg {
+    /// "clock" or "music"
+    pub kind: String,
+    /// Position in physical screen pixels (top-left of the glass).
+    pub x: i32,
+    pub y: i32,
+    /// For music: substring of the app id to prefer (e.g. "cloudmusic", "spotify"). Empty = system current session.
+    pub prefer: String,
+}
+
+impl Default for WidgetCfg {
+    fn default() -> Self {
+        WidgetCfg { kind: "clock".into(), x: 80, y: 80, prefer: String::new() }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Config {
+    /// Keep widgets above other windows (refracts windows behind them).
+    pub topmost: bool,
+    /// Max frames per second while something is changing.
+    pub fps: u32,
+    pub material: Material,
+    #[serde(rename = "widget")]
+    pub widgets: Vec<WidgetCfg>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            topmost: true,
+            fps: 60,
+            material: Material::default(),
+            widgets: vec![
+                WidgetCfg { kind: "clock".into(), x: 120, y: 120, prefer: String::new() },
+                WidgetCfg { kind: "music".into(), x: 120, y: 300, prefer: "cloudmusic".into() },
+            ],
+        }
+    }
+}
+
+pub fn path() -> PathBuf {
+    let mut p = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("glassdock.exe"));
+    p.set_file_name("glassdock.toml");
+    p
+}
+
+const HEADER: &str = "# GlassDock 配置 —— 保存后自动生效（材质参数热重载）\n\
+# material.blur        磨砂强度，0 = 全透，5 = 很糊\n\
+# material.refraction  边缘折射最大偏移（dip）\n\
+# material.edge        透镜带宽度（dip）\n\
+# material.aberration  边缘色散\n\
+# material.rim         锐利描边亮度\n\
+# material.adaptive    背景太亮时自动压暗，保证白字可读\n\
+# material.tint        玻璃底色 RGB，tint_amount 为混合量\n\
+# widget.prefer        音乐组件优先绑定的程序（cloudmusic / spotify / qqmusic ...）\n\n";
+
+pub fn load() -> Config {
+    let p = path();
+    match std::fs::read_to_string(&p) {
+        Ok(s) => match toml::from_str::<Config>(&s) {
+            Ok(c) => c,
+            Err(e) => {
+                crate::log(&format!("config parse error: {e}"));
+                Config::default()
+            }
+        },
+        Err(_) => {
+            let c = Config::default();
+            save(&c);
+            c
+        }
+    }
+}
+
+pub fn save(c: &Config) {
+    if let Ok(s) = toml::to_string_pretty(c) {
+        let _ = std::fs::write(path(), format!("{HEADER}{s}"));
+    }
+}
+
+pub fn mtime() -> Option<std::time::SystemTime> {
+    std::fs::metadata(path()).ok().and_then(|m| m.modified().ok())
+}
