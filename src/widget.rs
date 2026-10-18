@@ -132,7 +132,7 @@ impl Widget {
             let ph = ((h + margin * 2.0) * scale).ceil() as u32;
             let mpx = (margin * scale).round() as i32;
 
-            let mut ex = WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP;
+            let mut ex = (if kind == Kind::Settings { WS_EX_APPWINDOW } else { WS_EX_TOOLWINDOW }) | WS_EX_NOREDIRECTIONBITMAP;
             if topmost {
                 ex |= WS_EX_TOPMOST;
             }

@@ -64,6 +64,9 @@ fn run() -> Result<()> {
         widgets.push(wd);
     }
 
+    if std::env::args().any(|arg| arg == "--settings") {
+        settings::open(&g, &cfg)?;
+    }
     let mut mtime = config::mtime();
     let mut last_cfg_check = Instant::now();
     let mut last = Instant::now();
