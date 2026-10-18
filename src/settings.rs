@@ -12,7 +12,8 @@ thread_local! {
 }
 pub fn take() -> Option<Config> { PENDING.with(|p| p.borrow_mut().take()) }
 pub fn translate(msg: &MSG) -> bool {
-    WINDOW.with(|p| p.borrow().map(|hwnd| unsafe { IsDialogMessageW(hwnd, msg).as_bool() }).unwrap_or(false))
+    let hwnd = WINDOW.with(|p| *p.borrow());
+    hwnd.map(|hwnd| unsafe { IsDialogMessageW(hwnd, msg).as_bool() }).unwrap_or(false)
 }
 
 struct Field { path: String, edit: HWND, min: f64, max: f64 }
@@ -88,7 +89,7 @@ pub fn open(cfg: &Config) -> Result<()> {
             state.fields.push(Field { path: path.to_string(), edit, min: *min, max: *max });
         }
         control(hwnd, "STATIC", "修改后点击保存，立即生效。音乐来源示例：cloudmusic / spotify / qqmusic", WINDOW_STYLE::default(), 20, 465, 710, 0)?;
-        control(hwnd, "BUTTON", "保存并应用", WS_TABSTOP, 450, 505, 130, 1)?;
+        control(hwnd, "BUTTON", "保存并应用", WS_TABSTOP | WINDOW_STYLE(1), 450, 505, 130, 1)?;
         control(hwnd, "BUTTON", "取消", WS_TABSTOP, 600, 505, 120, 2)?;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
         WINDOW.with(|p| *p.borrow_mut() = Some(hwnd));

@@ -46,6 +46,7 @@ enum Btn {
 }
 
 struct Fonts {
+    cover_symbol: IDWriteTextFormat,
     tiny: IDWriteTextFormat,
     title: IDWriteTextFormat,
     body: IDWriteTextFormat,
@@ -174,6 +175,7 @@ impl Widget {
 
             let dw = &g.dwrite;
             let fonts = Fonts {
+                cover_symbol: text_format(dw, "Segoe UI Variable Display", 56.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
                 tiny: text_format(dw, "Microsoft YaHei UI", 11.0, DWRITE_FONT_WEIGHT_NORMAL)?,
                 title: text_format(dw, "Microsoft YaHei UI", 18.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
                 body: text_format(dw, "Microsoft YaHei UI", 13.0, DWRITE_FONT_WEIGHT_NORMAL)?,
@@ -402,7 +404,7 @@ impl Widget {
                 d2d.FillRoundedRectangle(&rr, &brush);
                 brush.SetColor(&rgba(1.0, 1.0, 1.0, 0.22));
                 d2d.DrawRoundedRectangle(&rr, &brush, 1.0 / self.scale, None);
-                text(d2d, &brush, "♪", &self.fonts.big, rect(52.0, 34.0, 70.0, 80.0), 0.55, false);
+                text(d2d, &brush, "♪", &self.fonts.cover_symbol, rect(52.0, 34.0, 70.0, 80.0), 0.55, false);
             }
 
             let x = 148.0;

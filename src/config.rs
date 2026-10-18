@@ -118,16 +118,20 @@ const HEADER: &str = "# GlassDock 配置 —— 保存后自动生效（材质�
 # material.tint        玻璃底色 RGB，tint_amount 为混合量\n\
 # widget.prefer        音乐组件优先绑定的程序（cloudmusic / spotify / qqmusic ...）\n\n";
 
+fn migrate(c: &mut Config) -> bool {
+    let changed = c.widgets.is_empty() || c.widgets.iter().any(|w| w.kind != "music");
+    c.widgets.retain(|w| w.kind == "music");
+    if c.widgets.is_empty() { c.widgets = Config::default().widgets; }
+    changed
+}
+
 pub fn load() -> Config {
     let p = path();
     match std::fs::read_to_string(&p) {
         Ok(s) => match toml::from_str::<Config>(&s) {
             Ok(mut c) => {
                 // Migrate old configurations without recreating the removed clock.
-                let changed = c.widgets.is_empty() || c.widgets.iter().any(|w| w.kind != "music");
-                c.widgets.retain(|w| w.kind == "music");
-                if c.widgets.is_empty() { c.widgets = Config::default().widgets; }
-                if changed { save(&c); }
+                if migrate(&mut c) { save(&c); }
                 c
             },
             Err(e) => {
@@ -170,5 +174,30 @@ mod tests {
         assert_eq!(restored.widgets[0].prefer, "cloudmusic");
         assert_eq!(restored.material.tint, cfg.material.tint);
         assert_eq!(restored.material.light, cfg.material.light);
+    }
+
+    #[test]
+    fn migration_preserves_music_position_and_source() {
+        let mut cfg = Config::default();
+        cfg.widgets[0].x = 842;
+        cfg.widgets[0].y = 456;
+        cfg.widgets[0].prefer = "spotify".into();
+        cfg.widgets.insert(0, WidgetCfg { kind: "clock".into(), ..WidgetCfg::default() });
+        assert!(migrate(&mut cfg));
+        assert_eq!(cfg.widgets.len(), 1);
+        assert_eq!((cfg.widgets[0].x, cfg.widgets[0].y), (842, 456));
+        assert_eq!(cfg.widgets[0].prefer, "spotify");
+        assert!(!migrate(&mut cfg));
+    }
+
+    #[test]
+    fn migration_recovers_clock_only_and_empty_configs() {
+        let mut cfg = Config::default();
+        cfg.widgets[0].kind = "clock".into();
+        assert!(migrate(&mut cfg));
+        assert_eq!(cfg.widgets[0].kind, "music");
+        cfg.widgets.clear();
+        assert!(migrate(&mut cfg));
+        assert_eq!(cfg.widgets.len(), 1);
     }
 }
