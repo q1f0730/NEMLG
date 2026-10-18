@@ -55,7 +55,7 @@ pub fn open(g: &Gfx, cfg: &Config) -> Result<()> {
     let mut pos = POINT::default();
     unsafe { let _ = GetCursorPos(&mut pos); }
     let panel = Panel::new(g, cfg)?;
-    let mut window = Widget::new(g, Kind::Settings, pos.x, pos.y, false)?;
+    let mut window = Widget::new(g, Kind::Settings, pos.x, pos.y, cfg.topmost)?;
     window.panel = Some(panel);
     unsafe {
         use windows::Win32::Graphics::Gdi::*;
@@ -65,7 +65,8 @@ pub fn open(g: &Gfx, cfg: &Config) -> Result<()> {
             let mut r = RECT::default(); let _ = GetWindowRect(window.hwnd, &mut r);
             let x = info.rcWork.left + ((info.rcWork.right - info.rcWork.left) - (r.right - r.left)) / 2;
             let y = info.rcWork.top + ((info.rcWork.bottom - info.rcWork.top) - (r.bottom - r.top)) / 2;
-            let _ = SetWindowPos(window.hwnd, Some(HWND_TOP), x, y, 0, 0, SWP_NOSIZE);
+            let z = if cfg.topmost { HWND_TOPMOST } else { HWND_TOP };
+            let _ = SetWindowPos(window.hwnd, Some(z), x, y, 0, 0, SWP_NOSIZE);
         }
         let _ = SetForegroundWindow(window.hwnd); let _ = SetFocus(Some(window.hwnd));
     }
