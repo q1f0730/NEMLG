@@ -62,7 +62,7 @@ impl Default for Material {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WidgetCfg {
-    /// "clock" or "music"
+    /// Only "music" is supported.
     pub kind: String,
     /// Position in physical screen pixels (top-left of the glass).
     pub x: i32,
@@ -73,7 +73,7 @@ pub struct WidgetCfg {
 
 impl Default for WidgetCfg {
     fn default() -> Self {
-        WidgetCfg { kind: "clock".into(), x: 80, y: 80, prefer: String::new() }
+        WidgetCfg { kind: "music".into(), x: 80, y: 80, prefer: String::new() }
     }
 }
 
@@ -96,7 +96,6 @@ impl Default for Config {
             fps: 60,
             material: Material::default(),
             widgets: vec![
-                WidgetCfg { kind: "clock".into(), x: 120, y: 120, prefer: String::new() },
                 WidgetCfg { kind: "music".into(), x: 120, y: 300, prefer: "cloudmusic".into() },
             ],
         }
@@ -119,11 +118,22 @@ const HEADER: &str = "# GlassDock 配置 —— 保存后自动生效（材质�
 # material.tint        玻璃底色 RGB，tint_amount 为混合量\n\
 # widget.prefer        音乐组件优先绑定的程序（cloudmusic / spotify / qqmusic ...）\n\n";
 
+fn migrate(c: &mut Config) -> bool {
+    let changed = c.widgets.is_empty() || c.widgets.iter().any(|w| w.kind != "music");
+    c.widgets.retain(|w| w.kind == "music");
+    if c.widgets.is_empty() { c.widgets = Config::default().widgets; }
+    changed
+}
+
 pub fn load() -> Config {
     let p = path();
     match std::fs::read_to_string(&p) {
         Ok(s) => match toml::from_str::<Config>(&s) {
-            Ok(c) => c,
+            Ok(mut c) => {
+                // Migrate old configurations without recreating the removed clock.
+                if migrate(&mut c) { save(&c); }
+                c
+            },
             Err(e) => {
                 crate::log(&format!("config parse error: {e}"));
                 Config::default()
@@ -137,12 +147,57 @@ pub fn load() -> Config {
     }
 }
 
+pub fn save_checked(c: &Config) -> std::io::Result<()> {
+    let s = toml::to_string_pretty(c).map_err(std::io::Error::other)?;
+    std::fs::write(path(), format!("{HEADER}{s}"))
+}
+
 pub fn save(c: &Config) {
-    if let Ok(s) = toml::to_string_pretty(c) {
-        let _ = std::fs::write(path(), format!("{HEADER}{s}"));
-    }
+    if let Err(e) = save_checked(c) { crate::log(&format!("config save error: {e}")); }
 }
 
 pub fn mtime() -> Option<std::time::SystemTime> {
     std::fs::metadata(path()).ok().and_then(|m| m.modified().ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_is_music_only_and_round_trips() {
+        let cfg = Config::default();
+        assert_eq!(cfg.widgets.len(), 1);
+        assert_eq!(cfg.widgets[0].kind, "music");
+        let text = toml::to_string(&cfg).unwrap();
+        let restored: Config = toml::from_str(&text).unwrap();
+        assert_eq!(restored.widgets[0].prefer, "cloudmusic");
+        assert_eq!(restored.material.tint, cfg.material.tint);
+        assert_eq!(restored.material.light, cfg.material.light);
+    }
+
+    #[test]
+    fn migration_preserves_music_position_and_source() {
+        let mut cfg = Config::default();
+        cfg.widgets[0].x = 842;
+        cfg.widgets[0].y = 456;
+        cfg.widgets[0].prefer = "spotify".into();
+        cfg.widgets.insert(0, WidgetCfg { kind: "clock".into(), ..WidgetCfg::default() });
+        assert!(migrate(&mut cfg));
+        assert_eq!(cfg.widgets.len(), 1);
+        assert_eq!((cfg.widgets[0].x, cfg.widgets[0].y), (842, 456));
+        assert_eq!(cfg.widgets[0].prefer, "spotify");
+        assert!(!migrate(&mut cfg));
+    }
+
+    #[test]
+    fn migration_recovers_clock_only_and_empty_configs() {
+        let mut cfg = Config::default();
+        cfg.widgets[0].kind = "clock".into();
+        assert!(migrate(&mut cfg));
+        assert_eq!(cfg.widgets[0].kind, "music");
+        cfg.widgets.clear();
+        assert!(migrate(&mut cfg));
+        assert_eq!(cfg.widgets.len(), 1);
+    }
 }

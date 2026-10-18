@@ -35,8 +35,8 @@ pub static TOPMOST: AtomicU32 = AtomicU32::new(1);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Kind {
-    Clock,
     Music,
+    Settings,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -47,14 +47,14 @@ enum Btn {
 }
 
 struct Fonts {
-    big: IDWriteTextFormat,
-    small: IDWriteTextFormat,
+    cover_symbol: IDWriteTextFormat,
     tiny: IDWriteTextFormat,
     title: IDWriteTextFormat,
     body: IDWriteTextFormat,
 }
 
 pub struct Widget {
+    pub panel: Option<crate::settings::Panel>,
     pub kind: Kind,
     pub hwnd: HWND,
     swap: IDXGISwapChain1,
@@ -107,26 +107,39 @@ fn dpi_scale_at(x: i32, y: i32) -> f32 {
 }
 
 impl Widget {
+    pub fn reset_cover(&mut self) {
+        self.cover_rev = u64::MAX;
+        self.cover_bmp = None;
+    }
+
     pub fn new(g: &Gfx, kind: Kind, x: i32, y: i32, topmost: bool) -> Result<Box<Widget>> {
         unsafe {
-            let scale = dpi_scale_at(x, y);
+            let mut scale = dpi_scale_at(x, y);
             let (w, h) = match kind {
-                Kind::Clock => (248.0, 132.0),
                 Kind::Music => (384.0, 148.0),
+                Kind::Settings => (crate::settings::WIDTH, crate::settings::HEIGHT),
             };
             let margin = 30.0;
+            if kind == Kind::Settings {
+                let mon = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
+                let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+                if GetMonitorInfoW(mon, &mut info).as_bool() {
+                    scale = scale.min((info.rcWork.right - info.rcWork.left) as f32 / (w + margin * 2.0))
+                        .min((info.rcWork.bottom - info.rcWork.top) as f32 / (h + margin * 2.0));
+                }
+            }
             let pw = ((w + margin * 2.0) * scale).ceil() as u32;
             let ph = ((h + margin * 2.0) * scale).ceil() as u32;
             let mpx = (margin * scale).round() as i32;
 
-            let mut ex = WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP;
+            let mut ex = (if kind == Kind::Settings { WS_EX_APPWINDOW } else { WS_EX_TOOLWINDOW }) | WS_EX_NOREDIRECTIONBITMAP;
             if topmost {
                 ex |= WS_EX_TOPMOST;
             }
             let hwnd = CreateWindowExW(
                 ex,
                 CLASS,
-                w!("GlassDock"),
+                if kind == Kind::Settings { w!("GlassDock 设置") } else { w!("GlassDock") },
                 WS_POPUP,
                 x - mpx,
                 y - mpx,
@@ -178,14 +191,14 @@ impl Widget {
 
             let dw = &g.dwrite;
             let fonts = Fonts {
-                big: text_format(dw, "Segoe UI Variable Display", 56.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
-                small: text_format(dw, "Microsoft YaHei UI", 14.0, DWRITE_FONT_WEIGHT_NORMAL)?,
+                cover_symbol: text_format(dw, "Segoe UI Variable Display", 56.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
                 tiny: text_format(dw, "Microsoft YaHei UI", 11.0, DWRITE_FONT_WEIGHT_NORMAL)?,
                 title: text_format(dw, "Microsoft YaHei UI", 18.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
                 body: text_format(dw, "Microsoft YaHei UI", 13.0, DWRITE_FONT_WEIGHT_NORMAL)?,
             };
 
             let mut wd = Box::new(Widget {
+                panel: None,
                 kind,
                 hwnd,
                 swap,
@@ -282,9 +295,9 @@ impl Widget {
             self.last_pos = pos;
             moving = true;
         }
-        // content signature (clock minute / media state)
+        // content signature (media state)
         let sig = match self.kind {
-            Kind::Clock => clock_strings().0,
+            Kind::Settings => String::new(),
             Kind::Music => {
                 if let Some((st, _)) = &self.media {
                     let s = st.lock().map(|s| s.clone()).unwrap_or_default();
@@ -351,24 +364,13 @@ impl Widget {
             d2d.BeginDraw();
             d2d.SetTransform(&Matrix3x2::translation(self.margin, self.margin));
             let _ = match self.kind {
-                Kind::Clock => self.draw_clock(g),
                 Kind::Music => self.draw_music(g),
+                Kind::Settings => self.panel.as_ref().map(|s| s.draw(g)).unwrap_or(Ok(())),
             };
             let _ = d2d.EndDraw(None, None);
             d2d.SetTarget(None);
             let _ = self.swap.Present(0, DXGI_PRESENT(0));
         }
-    }
-
-    fn draw_clock(&mut self, g: &Gfx) -> Result<()> {
-        let d2d = &g.d2d_ctx;
-        let (time, date) = clock_strings();
-        unsafe {
-            let brush = d2d.CreateSolidColorBrush(&rgba(1.0, 1.0, 1.0, 1.0), None)?;
-            text(d2d, &brush, &time, &self.fonts.big, rect(24.0, 10.0, 220.0, 76.0), 0.98, true);
-            text(d2d, &brush, &date, &self.fonts.small, rect(27.0, 88.0, 210.0, 24.0), 0.74, true);
-        }
-        Ok(())
     }
 
     fn draw_music(&mut self, g: &Gfx) -> Result<()> {
@@ -421,7 +423,7 @@ impl Widget {
                 d2d.FillRoundedRectangle(&rr, &brush);
                 brush.SetColor(&rgba(1.0, 1.0, 1.0, 0.22));
                 d2d.DrawRoundedRectangle(&rr, &brush, 1.0 / self.scale, None);
-                text(d2d, &brush, "♪", &self.fonts.big, rect(52.0, 34.0, 70.0, 80.0), 0.55, false);
+                text(d2d, &brush, "♪", &self.fonts.cover_symbol, rect(52.0, 34.0, 70.0, 80.0), 0.55, false);
             }
 
             let x = 148.0;
@@ -543,14 +545,6 @@ fn mmss(t: f64) -> String {
     format!("{}:{:02}", t / 60, t % 60)
 }
 
-fn clock_strings() -> (String, String) {
-    unsafe {
-        let t = windows::Win32::System::SystemInformation::GetLocalTime();
-        let wd = ["日", "一", "二", "三", "四", "五", "六"][t.wDayOfWeek as usize % 7];
-        (format!("{:02}:{:02}", t.wHour, t.wMinute), format!("{}月{}日  星期{}", t.wMonth, t.wDay, wd))
-    }
-}
-
 fn lparam_pt(l: LPARAM) -> (i32, i32) {
     let x = (l.0 & 0xffff) as i16 as i32;
     let y = ((l.0 >> 16) & 0xffff) as i16 as i32;
@@ -561,7 +555,7 @@ unsafe fn show_menu(hwnd: HWND) {
     let menu = CreatePopupMenu().unwrap();
     let top = TOPMOST.load(Ordering::Relaxed) == 1;
     let _ = AppendMenuW(menu, if top { MF_CHECKED } else { MF_UNCHECKED }, ACT_TOPMOST as usize, w!("始终置顶"));
-    let _ = AppendMenuW(menu, MF_STRING, ACT_EDIT as usize, w!("编辑配置…"));
+    let _ = AppendMenuW(menu, MF_STRING, ACT_EDIT as usize, w!("设置…"));
     let _ = AppendMenuW(menu, MF_STRING, ACT_RELOAD as usize, w!("重新加载配置"));
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
     let _ = AppendMenuW(menu, MF_STRING, ACT_QUIT as usize, w!("退出 GlassDock"));
@@ -582,6 +576,21 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             return DefWindowProcW(hwnd, msg, wp, lp);
         }
         let wd = &mut *ptr;
+        if let Some(panel) = wd.panel.as_mut() {
+            let (cx, cy) = lparam_pt(lp);
+            let (x, y) = (cx as f32 / wd.scale - wd.margin, cy as f32 / wd.scale - wd.margin);
+            match msg {
+                WM_MOUSEACTIVATE => return LRESULT(MA_ACTIVATE as isize),
+                WM_LBUTTONDOWN if !panel.wants_drag(x, y) => { panel.pointer(hwnd, msg, x, y); return LRESULT(0); }
+                WM_MOUSEMOVE | WM_LBUTTONUP if wd.dragging.is_none() => { panel.pointer(hwnd, msg, x, y); return LRESULT(0); }
+                WM_CAPTURECHANGED => { panel.pointer(hwnd, msg, x, y); wd.dragging = None; return LRESULT(0); }
+                WM_KEYDOWN => { panel.key(wp.0 as u16); return LRESULT(0); }
+                WM_CHAR => { panel.character(wp.0 as u32); return LRESULT(0); }
+                WM_CLOSE => { panel.closed = true; return LRESULT(0); }
+                WM_RBUTTONUP => return LRESULT(0),
+                _ => {}
+            }
+        }
         match msg {
             WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
             WM_LBUTTONDOWN => {

@@ -6,6 +6,7 @@ mod config;
 mod gfx;
 mod media;
 mod widget;
+mod settings;
 
 use std::io::Write;
 use std::sync::atomic::Ordering;
@@ -16,7 +17,6 @@ use windows::core::{w, Result, HSTRING};
 use windows::Win32::Graphics::Dwm::DwmFlush;
 use windows::Win32::System::Com::*;
 use windows::Win32::UI::HiDpi::*;
-use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use widget::*;
@@ -53,10 +53,7 @@ fn run() -> Result<()> {
 
     let mut widgets: Vec<Box<Widget>> = Vec::new();
     for wc in &cfg.widgets {
-        let kind = match wc.kind.as_str() {
-            "music" => Kind::Music,
-            _ => Kind::Clock,
-        };
+        let kind = Kind::Music;
         let mut wd = Widget::new(&g, kind, wc.x, wc.y, cfg.topmost)?;
         if kind == Kind::Music {
             let st = Arc::new(Mutex::new(media::State::default()));
@@ -67,10 +64,14 @@ fn run() -> Result<()> {
         widgets.push(wd);
     }
 
+    if std::env::args().any(|arg| arg == "--settings") {
+        settings::open(&g, &cfg)?;
+    }
     let mut mtime = config::mtime();
     let mut last_cfg_check = Instant::now();
     let mut last = Instant::now();
     let mut first = true;
+    let mut previewing = false;
     'main: loop {
         unsafe {
             let mut msg = MSG::default();
@@ -94,15 +95,42 @@ fn run() -> Result<()> {
                 save_positions(&mut cfg, &widgets);
                 mtime = config::mtime();
             }
-            ACT_EDIT => unsafe {
-                let p = HSTRING::from(config::path().to_string_lossy().to_string());
-                ShellExecuteW(None, w!("open"), w!("notepad.exe"), &p, None, SW_SHOWNORMAL);
+            ACT_EDIT => {
+                // Capture the latest positions before opening the settings snapshot.
+                for (c, w) in cfg.widgets.iter_mut().zip(&widgets) {
+                    (c.x, c.y) = w.glass_pos();
+                }
+                if let Err(e) = settings::open(&g, &cfg) { log(&format!("settings: {e}")); }
             },
             ACT_RELOAD => {
                 cfg.material = config::load().material;
                 first = true;
             }
             _ => {}
+        }
+
+        if let Some(mut next) = settings::take() {
+            for ((old, new), w) in cfg.widgets.iter().zip(&mut next.widgets).zip(&mut widgets) {
+                (new.x, new.y) = w.glass_pos();
+                if old.prefer != new.prefer {
+                    let st = Arc::new(Mutex::new(media::State::default()));
+                    let (tx, rx) = mpsc::channel();
+                    media::spawn(new.prefer.clone(), st.clone(), rx);
+                    w.media = Some((st, tx));
+                    w.reset_cover();
+                }
+                w.set_topmost(next.topmost);
+            }
+            TOPMOST.store(next.topmost as u32, Ordering::Relaxed);
+            match config::save_checked(&next) {
+                Ok(()) => {},
+                Err(e) => unsafe {
+                    MessageBoxW(None, &HSTRING::from(format!("设置已应用，但无法保存：{e}")), w!("GlassDock"), MB_ICONERROR);
+                },
+            }
+            cfg = next;
+            mtime = config::mtime();
+            first = true;
         }
 
         // hot-reload material when the file changes
@@ -113,6 +141,7 @@ fn run() -> Result<()> {
                 mtime = m;
                 let n = config::load();
                 cfg.material = n.material;
+                cfg.fps = n.fps;
                 if n.topmost != cfg.topmost {
                     cfg.topmost = n.topmost;
                     TOPMOST.store(cfg.topmost as u32, Ordering::Relaxed);
@@ -129,21 +158,29 @@ fn run() -> Result<()> {
         let dt = (now - last).as_secs_f32().min(0.1);
         last = now;
         let cap_changed = g.update_capture();
+        let preview = settings::preview();
+        let editing = preview.is_some();
+        if editing != previewing { first = true; }
+        previewing = editing;
+        let material = preview.as_ref().unwrap_or(&cfg.material);
         let mut drew = false;
         for w in widgets.iter_mut() {
             let need = w.tick(dt);
-            if need || cap_changed || first {
-                w.render(&g, &cfg.material);
+            if need || cap_changed || first || editing {
+                w.render(&g, material);
                 drew = true;
             }
         }
+        drew |= settings::render(&g, dt);
         first = false;
         unsafe {
             if drew {
                 let _ = DwmFlush();
-            } else {
-                let frame = 1000 / cfg.fps.clamp(10, 240);
-                MsgWaitForMultipleObjects(None, false, frame, QS_ALLINPUT);
+            }
+            let frame = Duration::from_secs_f64(1.0 / cfg.fps.clamp(10, 240) as f64);
+            let remaining = frame.saturating_sub(now.elapsed());
+            if !remaining.is_zero() {
+                MsgWaitForMultipleObjects(None, false, remaining.as_millis().max(1) as u32, QS_ALLINPUT);
             }
         }
     }
