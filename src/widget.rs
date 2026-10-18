@@ -35,7 +35,6 @@ pub static TOPMOST: AtomicU32 = AtomicU32::new(1);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Kind {
-    Clock,
     Music,
 }
 
@@ -47,8 +46,6 @@ enum Btn {
 }
 
 struct Fonts {
-    big: IDWriteTextFormat,
-    small: IDWriteTextFormat,
     tiny: IDWriteTextFormat,
     title: IDWriteTextFormat,
     body: IDWriteTextFormat,
@@ -111,7 +108,6 @@ impl Widget {
         unsafe {
             let scale = dpi_scale_at(x, y);
             let (w, h) = match kind {
-                Kind::Clock => (248.0, 132.0),
                 Kind::Music => (384.0, 148.0),
             };
             let margin = 30.0;
@@ -178,8 +174,6 @@ impl Widget {
 
             let dw = &g.dwrite;
             let fonts = Fonts {
-                big: text_format(dw, "Segoe UI Variable Display", 56.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
-                small: text_format(dw, "Microsoft YaHei UI", 14.0, DWRITE_FONT_WEIGHT_NORMAL)?,
                 tiny: text_format(dw, "Microsoft YaHei UI", 11.0, DWRITE_FONT_WEIGHT_NORMAL)?,
                 title: text_format(dw, "Microsoft YaHei UI", 18.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
                 body: text_format(dw, "Microsoft YaHei UI", 13.0, DWRITE_FONT_WEIGHT_NORMAL)?,
@@ -282,9 +276,8 @@ impl Widget {
             self.last_pos = pos;
             moving = true;
         }
-        // content signature (clock minute / media state)
+        // content signature (media state)
         let sig = match self.kind {
-            Kind::Clock => clock_strings().0,
             Kind::Music => {
                 if let Some((st, _)) = &self.media {
                     let s = st.lock().map(|s| s.clone()).unwrap_or_default();
@@ -351,24 +344,12 @@ impl Widget {
             d2d.BeginDraw();
             d2d.SetTransform(&Matrix3x2::translation(self.margin, self.margin));
             let _ = match self.kind {
-                Kind::Clock => self.draw_clock(g),
                 Kind::Music => self.draw_music(g),
             };
             let _ = d2d.EndDraw(None, None);
             d2d.SetTarget(None);
             let _ = self.swap.Present(0, DXGI_PRESENT(0));
         }
-    }
-
-    fn draw_clock(&mut self, g: &Gfx) -> Result<()> {
-        let d2d = &g.d2d_ctx;
-        let (time, date) = clock_strings();
-        unsafe {
-            let brush = d2d.CreateSolidColorBrush(&rgba(1.0, 1.0, 1.0, 1.0), None)?;
-            text(d2d, &brush, &time, &self.fonts.big, rect(24.0, 10.0, 220.0, 76.0), 0.98, true);
-            text(d2d, &brush, &date, &self.fonts.small, rect(27.0, 88.0, 210.0, 24.0), 0.74, true);
-        }
-        Ok(())
     }
 
     fn draw_music(&mut self, g: &Gfx) -> Result<()> {
@@ -543,14 +524,6 @@ fn mmss(t: f64) -> String {
     format!("{}:{:02}", t / 60, t % 60)
 }
 
-fn clock_strings() -> (String, String) {
-    unsafe {
-        let t = windows::Win32::System::SystemInformation::GetLocalTime();
-        let wd = ["日", "一", "二", "三", "四", "五", "六"][t.wDayOfWeek as usize % 7];
-        (format!("{:02}:{:02}", t.wHour, t.wMinute), format!("{}月{}日  星期{}", t.wMonth, t.wDay, wd))
-    }
-}
-
 fn lparam_pt(l: LPARAM) -> (i32, i32) {
     let x = (l.0 & 0xffff) as i16 as i32;
     let y = ((l.0 >> 16) & 0xffff) as i16 as i32;
@@ -561,7 +534,7 @@ unsafe fn show_menu(hwnd: HWND) {
     let menu = CreatePopupMenu().unwrap();
     let top = TOPMOST.load(Ordering::Relaxed) == 1;
     let _ = AppendMenuW(menu, if top { MF_CHECKED } else { MF_UNCHECKED }, ACT_TOPMOST as usize, w!("始终置顶"));
-    let _ = AppendMenuW(menu, MF_STRING, ACT_EDIT as usize, w!("编辑配置…"));
+    let _ = AppendMenuW(menu, MF_STRING, ACT_EDIT as usize, w!("设置…"));
     let _ = AppendMenuW(menu, MF_STRING, ACT_RELOAD as usize, w!("重新加载配置"));
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
     let _ = AppendMenuW(menu, MF_STRING, ACT_QUIT as usize, w!("退出 GlassDock"));
