@@ -68,6 +68,7 @@ fn run() -> Result<()> {
     let mut last_cfg_check = Instant::now();
     let mut last = Instant::now();
     let mut first = true;
+    let mut previewing = false;
     'main: loop {
         unsafe {
             let mut msg = MSG::default();
@@ -75,7 +76,6 @@ fn run() -> Result<()> {
                 if msg.message == WM_QUIT {
                     break 'main;
                 }
-                if settings::translate(&msg) { continue; }
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
@@ -97,7 +97,7 @@ fn run() -> Result<()> {
                 for (c, w) in cfg.widgets.iter_mut().zip(&widgets) {
                     (c.x, c.y) = w.glass_pos();
                 }
-                if let Err(e) = settings::open(&cfg) { log(&format!("settings: {e}")); }
+                if let Err(e) = settings::open(&g, &cfg) { log(&format!("settings: {e}")); }
             },
             ACT_RELOAD => {
                 cfg.material = config::load().material;
@@ -155,14 +155,20 @@ fn run() -> Result<()> {
         let dt = (now - last).as_secs_f32().min(0.1);
         last = now;
         let cap_changed = g.update_capture();
+        let preview = settings::preview();
+        let editing = preview.is_some();
+        if editing != previewing { first = true; }
+        previewing = editing;
+        let material = preview.as_ref().unwrap_or(&cfg.material);
         let mut drew = false;
         for w in widgets.iter_mut() {
             let need = w.tick(dt);
-            if need || cap_changed || first {
-                w.render(&g, &cfg.material);
+            if need || cap_changed || first || editing {
+                w.render(&g, material);
                 drew = true;
             }
         }
+        drew |= settings::render(&g, dt);
         first = false;
         unsafe {
             if drew {

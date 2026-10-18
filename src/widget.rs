@@ -36,6 +36,7 @@ pub static TOPMOST: AtomicU32 = AtomicU32::new(1);
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Kind {
     Music,
+    Settings,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -53,6 +54,7 @@ struct Fonts {
 }
 
 pub struct Widget {
+    pub panel: Option<crate::settings::Panel>,
     pub kind: Kind,
     pub hwnd: HWND,
     swap: IDXGISwapChain1,
@@ -112,11 +114,20 @@ impl Widget {
 
     pub fn new(g: &Gfx, kind: Kind, x: i32, y: i32, topmost: bool) -> Result<Box<Widget>> {
         unsafe {
-            let scale = dpi_scale_at(x, y);
+            let mut scale = dpi_scale_at(x, y);
             let (w, h) = match kind {
                 Kind::Music => (384.0, 148.0),
+                Kind::Settings => (crate::settings::WIDTH, crate::settings::HEIGHT),
             };
             let margin = 30.0;
+            if kind == Kind::Settings {
+                let mon = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
+                let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+                if GetMonitorInfoW(mon, &mut info).as_bool() {
+                    scale = scale.min((info.rcWork.right - info.rcWork.left) as f32 / (w + margin * 2.0))
+                        .min((info.rcWork.bottom - info.rcWork.top) as f32 / (h + margin * 2.0));
+                }
+            }
             let pw = ((w + margin * 2.0) * scale).ceil() as u32;
             let ph = ((h + margin * 2.0) * scale).ceil() as u32;
             let mpx = (margin * scale).round() as i32;
@@ -128,7 +139,7 @@ impl Widget {
             let hwnd = CreateWindowExW(
                 ex,
                 CLASS,
-                w!("GlassDock"),
+                if kind == Kind::Settings { w!("GlassDock 设置") } else { w!("GlassDock") },
                 WS_POPUP,
                 x - mpx,
                 y - mpx,
@@ -187,6 +198,7 @@ impl Widget {
             };
 
             let mut wd = Box::new(Widget {
+                panel: None,
                 kind,
                 hwnd,
                 swap,
@@ -285,6 +297,7 @@ impl Widget {
         }
         // content signature (media state)
         let sig = match self.kind {
+            Kind::Settings => String::new(),
             Kind::Music => {
                 if let Some((st, _)) = &self.media {
                     let s = st.lock().map(|s| s.clone()).unwrap_or_default();
@@ -352,6 +365,7 @@ impl Widget {
             d2d.SetTransform(&Matrix3x2::translation(self.margin, self.margin));
             let _ = match self.kind {
                 Kind::Music => self.draw_music(g),
+                Kind::Settings => self.panel.as_ref().map(|s| s.draw(g)).unwrap_or(Ok(())),
             };
             let _ = d2d.EndDraw(None, None);
             d2d.SetTarget(None);
@@ -562,6 +576,21 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             return DefWindowProcW(hwnd, msg, wp, lp);
         }
         let wd = &mut *ptr;
+        if let Some(panel) = wd.panel.as_mut() {
+            let (cx, cy) = lparam_pt(lp);
+            let (x, y) = (cx as f32 / wd.scale - wd.margin, cy as f32 / wd.scale - wd.margin);
+            match msg {
+                WM_MOUSEACTIVATE => return LRESULT(MA_ACTIVATE as isize),
+                WM_LBUTTONDOWN if !panel.wants_drag(x, y) => { panel.pointer(hwnd, msg, x, y); return LRESULT(0); }
+                WM_MOUSEMOVE | WM_LBUTTONUP if wd.dragging.is_none() => { panel.pointer(hwnd, msg, x, y); return LRESULT(0); }
+                WM_CAPTURECHANGED => { panel.pointer(hwnd, msg, x, y); wd.dragging = None; return LRESULT(0); }
+                WM_KEYDOWN => { panel.key(wp.0 as u16); return LRESULT(0); }
+                WM_CHAR => { panel.character(wp.0 as u32); return LRESULT(0); }
+                WM_CLOSE => { panel.closed = true; return LRESULT(0); }
+                WM_RBUTTONUP => return LRESULT(0),
+                _ => {}
+            }
+        }
         match msg {
             WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
             WM_LBUTTONDOWN => {
