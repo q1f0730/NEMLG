@@ -105,6 +105,11 @@ fn dpi_scale_at(x: i32, y: i32) -> f32 {
 }
 
 impl Widget {
+    pub fn reset_cover(&mut self) {
+        self.cover_rev = u64::MAX;
+        self.cover_bmp = None;
+    }
+
     pub fn new(g: &Gfx, kind: Kind, x: i32, y: i32, topmost: bool) -> Result<Box<Widget>> {
         unsafe {
             let scale = dpi_scale_at(x, y);

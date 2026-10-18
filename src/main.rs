@@ -114,6 +114,7 @@ fn run() -> Result<()> {
                     let (tx, rx) = mpsc::channel();
                     media::spawn(new.prefer.clone(), st.clone(), rx);
                     w.media = Some((st, tx));
+                    w.reset_cover();
                 }
                 w.set_topmost(next.topmost);
             }
